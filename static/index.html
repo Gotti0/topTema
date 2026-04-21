@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TopTema Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <style>
+        body { background-color: #0f172a; color: #f8fafc; }
+        .card { background-color: #1e293b; border-radius: 0.5rem; padding: 1.5rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+    </style>
+</head>
+<body class="p-8">
+    <div class="max-w-7xl mx-auto">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-blue-400">TopTema Dashboard</h1>
+            <p class="text-slate-400">키움 REST API 기반 테마 및 종목 분석</p>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Heatmap Section -->
+            <div class="lg:col-span-2 card">
+                <h2 class="text-xl font-semibold mb-4">테마별 등락율 히트맵</h2>
+                <div id="heatmap-chart"></div>
+            </div>
+
+            <!-- Top 10 Stocks Section -->
+            <div class="card">
+                <h2 class="text-xl font-semibold mb-2">테마 내 Top 10 종목</h2>
+                <p id="selected-theme-name" class="text-blue-400 mb-4">테마를 선택하세요</p>
+                <div id="top10-chart"></div>
+                <div id="stock-list" class="mt-4 space-y-2">
+                    <!-- Stocks will be listed here -->
+                </div>
+            </div>
+        </div>
+        
+        <!-- Theme List Table -->
+        <div class="mt-8 card">
+            <h2 class="text-xl font-semibold mb-4">전체 테마 목록</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="border-b border-slate-700">
+                            <th class="py-2 px-4">테마명</th>
+                            <th class="py-2 px-4 text-right">등락율</th>
+                            <th class="py-2 px-4 text-right">종목수</th>
+                            <th class="py-2 px-4">주요종목</th>
+                        </tr>
+                    </thead>
+                    <tbody id="theme-table-body">
+                        <!-- Theme rows will be injected here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
