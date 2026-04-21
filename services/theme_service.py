@@ -80,6 +80,12 @@ class ThemeService:
                     "change_amt": item.get("pred_pre")
                 })
             
+            self._cache[cache_key] = (top10, now)
+            return top10
+        except Exception as e:
+            logger.error(f"Error fetching theme top 10: {e}")
+            return []
+            
     async def get_available_dates(self) -> List[str]:
         """
         데이터가 존재하는 날짜 목록을 최신순으로 가져옵니다.

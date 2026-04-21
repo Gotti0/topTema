@@ -1,4 +1,5 @@
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -44,9 +45,37 @@ async def lifespan(app: FastAPI):
         collector_service = CollectorService(kiwoom_client)
         logger.info("Application started and Kiwoom client/DB initialized.")
         
-        # [Auto Collect] 서버 시작 시 자동 수집 실행
-        asyncio.create_task(collector_service.collect_daily_snapshot())
-        logger.info("Automatic daily snapshot collection triggered.")
+        # [Smart Sync] 누락된 과거 데이터 자동 보충 및 오늘 데이터 마감 후 수집
+        async def smart_sync():
+            try:
+                # 1. 영업일 목록 가져오기
+                today_str = datetime.now().strftime("%Y%m%d")
+                res = await kiwoom_client.get_daily_chart_data(stk_cd="005930", base_dt=today_str, upd_stkpc_tp="1")
+                dates = [item['dt'] for item in res.get("stk_dt_pole_chart_qry", [])[:10]]
+                
+                # 2. DB에 저장된 날짜 확인
+                available_dates = await theme_service.get_available_dates()
+                
+                # 3. 누락된 날짜 보충 (최근 5영업일 내)
+                for idx, dt in enumerate(dates[:5]):
+                    if dt not in available_dates:
+                        # 오늘 날짜(idx=0)인 경우 시간 체크
+                        if idx == 0:
+                            now = datetime.now()
+                            # 평일 15:40 이후일 때만 오늘 데이터 수집
+                            if now.time() >= datetime.strptime("15:40", "%H:%M").time():
+                                logger.info(f"Syncing today's final data: {dt}")
+                                await collector_service.collect_snapshot(1, dt, is_today=True)
+                            else:
+                                logger.info("Market is still open. Skipping today's snapshot for now.")
+                        else:
+                            # 과거 날짜인 경우 역산 수집
+                            logger.info(f"Filling missing historical data: {dt} (date_tp={idx+1})")
+                            await collector_service.collect_snapshot(idx + 1, dt)
+            except Exception as e:
+                logger.error(f"Smart sync failed: {e}")
+
+        asyncio.create_task(smart_sync())
     else:
         logger.error("No account found in settings. Client initialization skipped.")
 

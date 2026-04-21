@@ -9,66 +9,53 @@ class CollectorService:
     def __init__(self, client: KiwoomRestClient):
         self.client = client
 
-    async def collect_daily_snapshot(self):
+    async def collect_snapshot(self, date_tp: int, target_date: str, is_today: bool = False):
         """
-        오늘의 테마 및 대장주 정보를 수집하여 DB에 저장합니다.
-        보통 장 마감 후 호출됩니다.
+        특정 시점(date_tp)의 데이터를 수집하여 저장합니다.
         """
-        log_date = datetime.now().strftime("%Y%m%d")
-        logger.info(f"Starting daily snapshot collection for {log_date}")
-
         try:
-            # 1. 전체 테마 그룹 수집 (ka90001)
-            theme_res = await self.client.get_theme_groups(qry_tp="0", date_tp="1", flu_pl_amt_tp="3")
-            theme_list = theme_res.get("thema_grp", [])
+            # 1. n일 전 누적 데이터 수집 (R_n)
+            res_n = await self.client.get_theme_groups(qry_tp="0", date_tp=str(date_tp), flu_pl_amt_tp="3")
+            themes_n = res_n.get("thema_grp", [])
+            
+            # 2. n+1일 전 누적 데이터 수집 (R_{n+1}) - 역산을 위해 필요
+            res_n_plus_1 = await self.client.get_theme_groups(qry_tp="0", date_tp=str(date_tp + 1), flu_pl_amt_tp="3")
+            themes_n_plus_1 = {t['thema_grp_cd']: t for t in res_n_plus_1.get("thema_grp", [])}
 
             async with await get_db() as db:
-                # 테마 정보 저장
-                for theme in theme_list:
-                    theme_cd = theme.get("thema_grp_cd")
-                    theme_nm = theme.get("thema_nm")
-                    flu_rt = float(theme.get("flu_rt", "0").replace("+", ""))
-                    stk_num = int(theme.get("stk_num", "0"))
-                    main_stk = theme.get("main_stk")
+                for t in themes_n:
+                    cd = t['thema_grp_cd']
+                    nm = t['thema_nm']
+                    stk_num = int(t['stk_num'])
+                    main_stk = t['main_stk']
+                    
+                    # 오늘 데이터면 실시간 등락률 그대로 사용, 과거면 역산 공식 적용
+                    if is_today:
+                        daily_rt = float(t['flu_rt'].replace("+", ""))
+                    else:
+                        r_n = float(t['dt_prft_rt'].replace("+", "")) / 100
+                        if cd in themes_n_plus_1:
+                            r_n_plus_1 = float(themes_n_plus_1[cd]['dt_prft_rt'].replace("+", "")) / 100
+                            daily_rt = ((1 + r_n_plus_1) / (1 + r_n) - 1) * 100
+                        else:
+                            daily_rt = 0.0
 
                     await db.execute("""
                         INSERT OR REPLACE INTO daily_themes 
                         (log_date, theme_cd, theme_nm, flu_rt, stk_num, main_stk_nm)
                         VALUES (?, ?, ?, ?, ?, ?)
-                    """, (log_date, theme_cd, theme_nm, flu_rt, stk_num, main_stk))
-
-                    # 2. 각 테마의 상위 10개 종목 수집 (ka90002)
-                    # *주의: 테마가 많을 경우 API 호출 제한에 걸릴 수 있으므로 
-                    # 실제 운영 환경에서는 등락률 상위 N개 테마만 상세 수집하는 것이 안전함.
-                    if flu_rt > 0: # 상승한 테마만 우선 수집 예시
-                        stock_res = await self.client.get_theme_details(theme_grp_cd=theme_cd, date_tp="1")
-                        stocks = stock_res.get("thema_comp_stk", [])
-                        
-                        # 등락률 순 정렬
-                        sorted_stocks = sorted(
-                            stocks, 
-                            key=lambda x: float(x.get("flu_rt", "0").replace("+", "")), 
-                            reverse=True
-                        )
-
-                        for idx, s in enumerate(sorted_stocks[:10]):
-                            await db.execute("""
-                                INSERT OR REPLACE INTO daily_theme_stocks
-                                (log_date, theme_cd, stk_cd, stk_nm, flu_rt, rank)
-                                VALUES (?, ?, ?, ?, ?, ?)
-                            """, (
-                                log_date, 
-                                theme_cd, 
-                                s.get("stk_cd"), 
-                                s.get("stk_nm"), 
-                                float(s.get("flu_rt", "0").replace("+", "")),
-                                idx + 1
-                            ))
+                    """, (target_date, cd, nm, round(daily_rt, 2), stk_num, main_stk))
                 
                 await db.commit()
-                logger.info(f"Daily snapshot for {log_date} completed.")
-                return True
-
+            return True
         except Exception as e:
-            logger.error(f"Error during daily collection: {e}")
+            logger.error(f"Error collecting snapshot for {target_date}: {e}")
             return False
+
+    async def collect_daily_snapshot(self):
+        """
+        기존 호출 방식 유지 (오늘 데이터 수집)
+        """
+        from datetime import datetime
+        today = datetime.now().strftime("%Y%m%d")
+        return await self.collect_snapshot(1, today, is_today=True)
