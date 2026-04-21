@@ -80,8 +80,28 @@ class ThemeService:
                     "change_amt": item.get("pred_pre")
                 })
             
-            self._cache[cache_key] = (top10, now)
-            return top10
-        except Exception as e:
-            logger.error(f"Error fetching theme top 10: {e}")
-            return []
+    async def get_available_dates(self) -> List[str]:
+        """
+        데이터가 존재하는 날짜 목록을 최신순으로 가져옵니다.
+        """
+        async with await get_db() as db:
+            async with db.execute("SELECT DISTINCT log_date FROM daily_themes ORDER BY log_date DESC") as cursor:
+                rows = await cursor.fetchall()
+                return [row[0] for row in rows]
+
+    async def get_historical_heatmap(self, log_date: str) -> List[Dict[str, Any]]:
+        """
+        특정 날짜의 테마 데이터를 DB에서 조회합니다.
+        """
+        async with await get_db() as db:
+            async with db.execute("""
+                SELECT theme_cd, theme_nm, flu_rt, stk_num, main_stk_nm 
+                FROM daily_themes 
+                WHERE log_date = ?
+                ORDER BY flu_rt DESC
+            """, (log_date,)) as cursor:
+                rows = await cursor.fetchall()
+                return [{
+                    "id": r[0], "name": r[1], "value": r[2], 
+                    "stk_num": r[3], "main_stk": r[4]
+                } for r in rows]

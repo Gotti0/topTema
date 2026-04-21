@@ -20,57 +20,67 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // 히트맵 렌더링
+    // 트리맵 렌더링 (가독성 개선 버전)
     function renderHeatmap(data) {
-        // 데이터를 ApexCharts Heatmap 포맷으로 변환
-        // 예: [{ name: 'Range 1', data: [{x: 'Theme A', y: 1.2}] }]
-        const series = [];
-        const itemsPerSeries = Math.ceil(data.length / 5);
-        
-        for (let i = 0; i < 5; i++) {
-            const chunk = data.slice(i * itemsPerSeries, (i + 1) * itemsPerSeries);
-            if (chunk.length === 0) continue;
-            
-            series.push({
-                name: `Group ${i + 1}`,
-                data: chunk.map(item => ({
-                    x: item.name,
-                    y: item.value,
-                    themeId: item.id
-                }))
-            });
-        }
+        const seriesData = data.map(item => {
+            const val = item.value;
+            let color = '#475569'; // Neutral (Slate 600)
+            if (val <= -3) color = '#b91c1c'; // Red 700
+            else if (val < -1) color = '#ef4444'; // Red 500
+            else if (val >= 3) color = '#15803d'; // Green 700
+            else if (val > 1) color = '#22c55e'; // Green 500
+
+            return {
+                x: item.name,
+                y: Math.abs(val) || 0.5, // 너무 작으면 글자가 안 보이므로 최소값 상향
+                actualValue: val,
+                themeId: item.id,
+                fillColor: color
+            };
+        });
 
         const options = {
-            series: series,
+            series: [{ data: seriesData }],
             chart: {
-                height: 450,
-                type: 'heatmap',
+                height: 550, // 높이 상향
+                type: 'treemap',
                 events: {
                     dataPointSelection: (event, chartContext, config) => {
-                        const item = series[config.seriesIndex].data[config.dataPointIndex];
+                        const item = options.series[config.seriesIndex].data[config.dataPointIndex];
                         loadThemeStocks(item.themeId, item.x);
                     }
                 },
                 toolbar: { show: false }
             },
-            dataLabels: { enabled: false },
-            colors: ["#ef4444", "#22c55e"], // Red to Green
+            dataLabels: { 
+                enabled: true,
+                style: {
+                    fontSize: '11px',
+                    fontWeight: 'bold',
+                    fontFamily: 'Pretendard, sans-serif'
+                },
+                formatter: function(text, op) {
+                    const val = op.value;
+                    const actualValue = op.w.config.series[op.seriesIndex].data[op.dataPointIndex].actualValue;
+                    // 셀이 너무 작으면 텍스트 숨김 (가독성 확보)
+                    if (op.value < 1.0) return ''; 
+                    return [text, actualValue + "%"];
+                },
+                offsetY: -2
+            },
             plotOptions: {
-                heatmap: {
-                    shadeIntensity: 0.5,
-                    colorScale: {
-                        ranges: [
-                            { from: -100, to: -3, color: '#991b1b', name: 'Very Low' },
-                            { from: -3, to: -1, color: '#ef4444', name: 'Low' },
-                            { from: -1, to: 1, color: '#64748b', name: 'Neutral' },
-                            { from: 1, to: 3, color: '#22c55e', name: 'High' },
-                            { from: 3, to: 100, color: '#166534', name: 'Very High' }
-                        ]
-                    }
+                treemap: {
+                    enableShades: false, // 단색으로 대비 명확화
+                    distributed: true,
+                    useFillColorAsStroke: false
                 }
             },
-            xaxis: { labels: { show: false } },
+            stroke: {
+                show: true,
+                width: 2,
+                colors: ['#0f172a'] // 배경색과 동일한 선으로 구분감 부여
+            },
+            legend: { show: false },
             theme: { mode: 'dark' }
         };
 
@@ -149,6 +159,29 @@ document.addEventListener('DOMContentLoaded', async () => {
         stockListEl.innerHTML = '';
         stocks.forEach(s => {
             const item = document.createElement('div');
+            item.className = 'flex justify-between items-center p-3 bg-slate-800 rounded-md';
+            const changeVal = parseFloat(s.change_rt);
+            const colorClass = changeVal > 0 ? 'text-green-400' : (changeVal < 0 ? 'text-red-400' : 'text-slate-400');
+            
+            item.innerHTML = `
+                <div>
+                    <span class="font-medium">${s.name}</span>
+                    <span class="text-xs text-slate-500 ml-2">${s.code}</span>
+                </div>
+                <div class="text-right">
+                    <div class="${colorClass} font-bold">${s.change_rt}</div>
+                    <div class="text-xs text-slate-400">${s.price}</div>
+                </div>
+            `;
+            stockListEl.appendChild(item);
+        });
+    }
+
+    // 초기 로드
+    await fetchDates();
+    fetchThemes();
+});
+ement('div');
             item.className = 'flex justify-between items-center p-3 bg-slate-800 rounded-md';
             const changeVal = parseFloat(s.change_rt);
             const colorClass = changeVal > 0 ? 'text-green-400' : (changeVal < 0 ? 'text-red-400' : 'text-slate-400');

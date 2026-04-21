@@ -5,7 +5,7 @@ services:
     build: .
     container_name: toptema-app
     ports:
-      - "8080:8080"
+      - "5173:5173"
     env_file:
       - .env
     restart: always

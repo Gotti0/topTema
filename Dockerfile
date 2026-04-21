@@ -18,10 +18,10 @@ COPY . .
 
 # 환경 변수 설정
 ENV PYTHONUNBUFFERED=1
-ENV PORT=8080
+ENV PORT=5173
 
 # 포트 개방
-EXPOSE 8080
+EXPOSE 5173
 
 # 실행 명령
 CMD ["python", "-m", "app.main"]

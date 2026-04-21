@@ -13,9 +13,17 @@
 </head>
 <body class="p-8">
     <div class="max-w-7xl mx-auto">
-        <header class="mb-8">
-            <h1 class="text-3xl font-bold text-blue-400">TopTema Dashboard</h1>
-            <p class="text-slate-400">키움 REST API 기반 테마 및 종목 분석</p>
+        <header class="mb-8 flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-bold text-blue-400">TopTema Dashboard</h1>
+                <p class="text-slate-400">키움 REST API 기반 테마 및 종목 분석</p>
+            </div>
+            <div class="flex items-center gap-4">
+                <label for="date-select" class="text-sm text-slate-400">조회 날짜:</label>
+                <select id="date-select" class="bg-slate-800 border border-slate-700 rounded px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">실시간 (LIVE)</option>
+                </select>
+            </div>
         </header>
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
