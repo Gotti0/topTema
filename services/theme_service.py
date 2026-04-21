@@ -1,7 +1,9 @@
 import logging
 import time
+import aiosqlite
 from typing import List, Dict, Any, Optional
 from core.client import KiwoomRestClient
+from core.database import DB_PATH
 from config.settings import ACCOUNTS, get_api_keys
 
 logger = logging.getLogger(__name__)
@@ -46,12 +48,44 @@ class ThemeService:
             logger.error(f"Error fetching heatmap data: {e}")
             return []
 
-    async def get_theme_top10(self, theme_grp_cd: str) -> List[Dict[str, Any]]:
+    async def get_theme_top10(self, theme_grp_cd: str, log_date: str = None) -> List[Dict[str, Any]]:
         """
         특정 테마 내 상위 등락율 종목 10개를 가져옵니다.
+        log_date가 있으면 DB에서, 없으면 실시간 API로 가져옵니다.
         """
-        cache_key = f"top10_{theme_grp_cd}"
+        if log_date:
+            try:
+                # 과거 데이터는 캐시를 타지 않거나 날짜별 전용 캐시 사용
+                cache_key = f"top10_{theme_grp_cd}_{log_date}"
+                if cache_key in self._cache:
+                    data, timestamp = self._cache[cache_key]
+                    if time.time() - timestamp < self._cache_ttl:
+                        return data
+
+                async with aiosqlite.connect(DB_PATH) as db:
+                    async with db.execute("""
+                        SELECT stk_cd, stk_nm, flu_rt 
+                        FROM daily_theme_stocks 
+                        WHERE theme_cd = ? AND log_date = ?
+                        ORDER BY rank ASC
+                        LIMIT 10
+                    """, (theme_grp_cd, log_date)) as cursor:
+                        rows = await cursor.fetchall()
+                        res = [{
+                            "code": r[0], "name": r[1], "price": "N/A", 
+                            "change_rt": f"{'+' if r[2] > 0 else ''}{r[2]}%",
+                            "change_amt": "0"
+                        } for r in rows]
+                        self._cache[cache_key] = (res, time.time())
+                        return res
+            except Exception as e:
+                logger.error(f"Error fetching historical top 10 for {theme_grp_cd}: {e}")
+                return []
+
+        # 실시간 데이터용 캐시 키 (기존 유지)
+        cache_key = f"top10_{theme_grp_cd}_live"
         now = time.time()
+        # ... (생략된 실시간 조회 로직 유지)
 
         if cache_key in self._cache:
             data, timestamp = self._cache[cache_key]
@@ -90,24 +124,32 @@ class ThemeService:
         """
         데이터가 존재하는 날짜 목록을 최신순으로 가져옵니다.
         """
-        async with await get_db() as db:
-            async with db.execute("SELECT DISTINCT log_date FROM daily_themes ORDER BY log_date DESC") as cursor:
-                rows = await cursor.fetchall()
-                return [row[0] for row in rows]
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("SELECT DISTINCT log_date FROM daily_themes ORDER BY log_date DESC") as cursor:
+                    rows = await cursor.fetchall()
+                    return [row[0] for row in rows]
+        except Exception as e:
+            logger.error(f"Error getting available dates: {e}")
+            return []
 
     async def get_historical_heatmap(self, log_date: str) -> List[Dict[str, Any]]:
         """
         특정 날짜의 테마 데이터를 DB에서 조회합니다.
         """
-        async with await get_db() as db:
-            async with db.execute("""
-                SELECT theme_cd, theme_nm, flu_rt, stk_num, main_stk_nm 
-                FROM daily_themes 
-                WHERE log_date = ?
-                ORDER BY flu_rt DESC
-            """, (log_date,)) as cursor:
-                rows = await cursor.fetchall()
-                return [{
-                    "id": r[0], "name": r[1], "value": r[2], 
-                    "stk_num": r[3], "main_stk": r[4]
-                } for r in rows]
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("""
+                    SELECT theme_cd, theme_nm, flu_rt, stk_num, main_stk_nm 
+                    FROM daily_themes 
+                    WHERE log_date = ?
+                    ORDER BY flu_rt DESC
+                """, (log_date,)) as cursor:
+                    rows = await cursor.fetchall()
+                    return [{
+                        "id": r[0], "name": r[1], "value": r[2], 
+                        "stk_num": r[3], "main_stk": r[4]
+                    } for r in rows]
+        except Exception as e:
+            logger.error(f"Error getting historical heatmap for {log_date}: {e}")
+            return []

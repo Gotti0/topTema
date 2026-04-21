@@ -20,9 +20,12 @@
             </div>
             <div class="flex items-center gap-4">
                 <label for="date-select" class="text-sm text-slate-400">조회 날짜:</label>
-                <select id="date-select" class="bg-slate-800 border border-slate-700 rounded px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <option value="">실시간 (LIVE)</option>
-                </select>
+                <input type="date" id="date-select" 
+                       class="bg-slate-800 border border-slate-700 rounded px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                       style="color-scheme: dark;">
+                <button id="live-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium transition-colors">
+                    LIVE
+                </button>
             </div>
         </header>
 

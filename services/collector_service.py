@@ -45,7 +45,39 @@ class CollectorService:
                         (log_date, theme_cd, theme_nm, flu_rt, stk_num, main_stk_nm)
                         VALUES (?, ?, ?, ?, ?, ?)
                     """, (target_date, cd, nm, round(daily_rt, 2), stk_num, main_stk))
+
+                    # [추가] 각 테마의 상위 10개 종목 상세 수집 (과거 날짜 복원용)
+                    # 전체 테마를 다 하면 API 호출이 너무 많으므로, 주요 테마(등락률 상위 30개)만 상세 수집
+                    # (배치 실행 시에는 호출 제한에 주의해야 함)
                 
+                await db.commit()
+                
+                # 상위 30개 테마에 대해서만 종목 상세 정보 수집 (API 할당량 관리)
+                top_themes = sorted(themes_n, key=lambda x: float(x.get("flu_rt", "0").replace("+", "")), reverse=True)[:30]
+                for theme in top_themes:
+                    t_cd = theme.get("thema_grp_cd")
+                    stock_res = await self.client.get_theme_details(theme_grp_cd=t_cd, date_tp=str(date_tp))
+                    stocks = stock_res.get("thema_comp_stk", [])
+                    
+                    sorted_stocks = sorted(
+                        stocks, 
+                        key=lambda x: float(x.get("flu_rt", "0").replace("+", "")), 
+                        reverse=True
+                    )
+
+                    for idx, s in enumerate(sorted_stocks[:10]):
+                        await db.execute("""
+                            INSERT OR REPLACE INTO daily_theme_stocks
+                            (log_date, theme_cd, stk_cd, stk_nm, flu_rt, rank)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (
+                            target_date, 
+                            t_cd, 
+                            s.get("stk_cd").split("_")[0], # _AL 제거 
+                            s.get("stk_nm"), 
+                            float(s.get("flu_rt", "0").replace("+", "")),
+                            idx + 1
+                        ))
                 await db.commit()
             return True
         except Exception as e:

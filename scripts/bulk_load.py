@@ -3,26 +3,27 @@ import logging
 import sys
 import os
 import aiosqlite
+import time
 from datetime import datetime
 
-# 프로젝트 루트를 path에 추가하여 core, config 임포트 가능하게 설정
+# 프로젝트 루트를 path에 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.client import KiwoomRestClient
-from core.database import init_db, get_db
+from core.database import init_db, DB_PATH
 from config.settings import ACCOUNTS, get_api_keys
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("BulkLoader")
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'
+)
+logger = logging.getLogger("DeepBulkLoader")
 
 async def get_business_dates(client: KiwoomRestClient):
-    """
-    최근 100영업일의 날짜 리스트를 가져옵니다.
-    """
     logger.info("영업일 리스트 조회 중...")
     today = datetime.now().strftime("%Y%m%d")
     res = await client.get_daily_chart_data(stk_cd="005930", base_dt=today, upd_stkpc_tp="1")
-    # 모의투자 API 응답 키: stk_dt_pole_chart_qry
     chart_data = res.get("stk_dt_pole_chart_qry", [])
     return [item['dt'] for item in chart_data]
 
@@ -42,53 +43,41 @@ async def run_bulk_load():
             logger.error("영업일 데이터를 가져오지 못했습니다.")
             return
         
-        # history[n] = { theme_cd: {name, cum_rt, stk_num, main_stk} }
+        # 1. 누적 수익률 데이터 수집 (101일치)
         history = {}
-        
-        logger.info("100일치 누적 수익률 데이터 수집 시작 (잠시 시간이 걸립니다)...")
-        for n in range(1, 102): # n+1 계산을 위해 101까지 수집
-            sys.stdout.write(f"\rAPI 요청 중: date_tp={n}/101")
-            sys.stdout.flush()
+        logger.info("1. 100일치 테마 누적 수익률 수집 시작...")
+        for n in range(1, 102):
             try:
                 res = await client.get_theme_groups(qry_tp="0", date_tp=str(n), flu_pl_amt_tp="3")
                 themes = res.get("thema_grp", [])
-                day_data = {}
-                for t in themes:
-                    cd = t['thema_grp_cd']
-                    # "+" 제거 및 float 변환
-                    cum_rt = float(t['dt_prft_rt'].replace("+", ""))
-                    day_data[cd] = {
-                        "name": t['thema_nm'],
-                        "cum_rt": cum_rt,
-                        "stk_num": int(t['stk_num']),
-                        "main_stk": t['main_stk']
-                    }
+                day_data = {t['thema_grp_cd']: {
+                    "name": t['thema_nm'],
+                    "cum_rt": float(t['dt_prft_rt'].replace("+", "")),
+                    "stk_num": int(t['stk_num']),
+                    "main_stk": t['main_stk']
+                } for t in themes}
                 history[n] = day_data
-                await asyncio.sleep(0.1) # 과도한 요청 방지
+                if n % 10 == 0: logger.info(f"진행 중: {n}/101일 수집 완료")
+                await asyncio.sleep(0.2) 
             except Exception as e:
-                logger.error(f"\nError at date_tp={n}: {e}")
+                logger.error(f"Error at date_tp={n}: {e}")
                 break
-        
-        print("\n")
-        logger.info("일별 등락률 역산 및 DB 저장 시작...")
-        
-        # get_db() 대신 직접 연결하여 컨텍스트 매니저 사용 (에러 방지)
-        from core.database import DB_PATH
+
+        # 2. 일별 데이터 역산 및 상세 종목 수집 저장
+        logger.info("2. 일별 데이터 역산 및 종목 상세 정보 수집/저장 시작...")
         async with aiosqlite.connect(DB_PATH) as db:
-            # dates[0]은 오늘, dates[1]은 어제...
             for i in range(100):
                 if i >= len(dates): break
                 
                 log_date = dates[i]
-                n = i + 1 # date_tp는 1부터 시작
-                
-                # 오늘(i=0)의 등락률은 R1 그대로 사용
-                # 그 외 과거(i>0)는 (1+R_{n+1})/(1+R_n) - 1 공식 사용
+                n = i + 1
                 curr_history = history.get(n)
                 next_history = history.get(n+1)
                 
                 if not curr_history: continue
                 
+                # 해당 날짜의 테마들 저장
+                theme_list_for_stocks = []
                 for cd, data in curr_history.items():
                     if i == 0:
                         daily_rt = data['cum_rt']
@@ -96,20 +85,47 @@ async def run_bulk_load():
                         if next_history and cd in next_history:
                             r_n = data['cum_rt'] / 100
                             r_n_plus_1 = next_history[cd]['cum_rt'] / 100
-                            # 역산 공식 적용
                             daily_rt = ((1 + r_n_plus_1) / (1 + r_n) - 1) * 100
                         else:
-                            # 과거 데이터가 없는 경우 (신규 생성 테마 등)
                             daily_rt = 0.0
                     
+                    daily_rt = round(daily_rt, 2)
+                    theme_list_for_stocks.append({"cd": cd, "rt": daily_rt})
+
                     await db.execute("""
                         INSERT OR REPLACE INTO daily_themes 
                         (log_date, theme_cd, theme_nm, flu_rt, stk_num, main_stk_nm)
                         VALUES (?, ?, ?, ?, ?, ?)
-                    """, (log_date, cd, data['name'], round(daily_rt, 2), data['stk_num'], data['main_stk']))
-            
-            await db.commit()
-        logger.info(f"일괄 적재 완료! ({len(dates)}일치 데이터)")
+                    """, (log_date, cd, data['name'], daily_rt, data['stk_num'], data['main_stk']))
+
+                # 해당 날짜의 상위 20개 테마에 대해 종목 상세(Top 10) 수집
+                top_20_themes = sorted(theme_list_for_stocks, key=lambda x: x['rt'], reverse=True)[:20]
+                
+                logger.info(f"[{log_date}] 상위 20개 테마 종목 수집 중...")
+                for theme in top_20_themes:
+                    try:
+                        stock_res = await client.get_theme_details(theme_grp_cd=theme['cd'], date_tp=str(n))
+                        stocks = stock_res.get("thema_comp_stk", [])
+                        sorted_stocks = sorted(stocks, key=lambda x: float(x.get("flu_rt", "0").replace("+", "")), reverse=True)
+
+                        for idx, s in enumerate(sorted_stocks[:10]):
+                            await db.execute("""
+                                INSERT OR REPLACE INTO daily_theme_stocks
+                                (log_date, theme_cd, stk_cd, stk_nm, flu_rt, rank)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                            """, (
+                                log_date, theme['cd'], s.get("stk_cd").split("_")[0], 
+                                s.get("stk_nm"), float(s.get("flu_rt", "0").replace("+", "")), idx + 1
+                            ))
+                        await asyncio.sleep(0.1) # 종목 조회 간 지연
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch stocks for theme {theme['cd']} on {log_date}: {e}")
+                
+                await db.commit() # 날짜별로 커밋
+                logger.info(f"[{log_date}] 완료 ({i+1}/100)")
+                await asyncio.sleep(0.5) # 날짜 간 지연
+
+        logger.info("모든 데이터(테마 + 종목 상세) 적재가 완료되었습니다!")
 
 if __name__ == "__main__":
     asyncio.run(run_bulk_load())

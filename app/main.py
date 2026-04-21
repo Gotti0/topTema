@@ -128,10 +128,10 @@ async def get_themes(date: str = None):
     return data
 
 @app.get("/api/themes/{theme_id}/stocks")
-async def get_theme_stocks(theme_id: str):
+async def get_theme_stocks(theme_id: str, date: str = None):
     if not theme_service:
         raise HTTPException(status_code=503, detail="Service not initialized")
-    data = await theme_service.get_theme_top10(theme_id)
+    data = await theme_service.get_theme_top10(theme_id, log_date=date)
     return data
 
 if __name__ == "__main__":
