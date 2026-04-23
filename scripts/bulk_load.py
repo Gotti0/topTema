@@ -98,34 +98,11 @@ async def run_bulk_load():
                         VALUES (?, ?, ?, ?, ?, ?)
                     """, (log_date, cd, data['name'], daily_rt, data['stk_num'], data['main_stk']))
 
-                # 해당 날짜의 상위 20개 테마에 대해 종목 상세(Top 10) 수집
-                top_20_themes = sorted(theme_list_for_stocks, key=lambda x: x['rt'], reverse=True)[:20]
-                
-                logger.info(f"[{log_date}] 상위 20개 테마 종목 수집 중...")
-                for theme in top_20_themes:
-                    try:
-                        stock_res = await client.get_theme_details(theme_grp_cd=theme['cd'], date_tp=str(n))
-                        stocks = stock_res.get("thema_comp_stk", [])
-                        sorted_stocks = sorted(stocks, key=lambda x: float(x.get("flu_rt", "0").replace("+", "")), reverse=True)
-
-                        for idx, s in enumerate(sorted_stocks[:10]):
-                            await db.execute("""
-                                INSERT OR REPLACE INTO daily_theme_stocks
-                                (log_date, theme_cd, stk_cd, stk_nm, flu_rt, rank)
-                                VALUES (?, ?, ?, ?, ?, ?)
-                            """, (
-                                log_date, theme['cd'], s.get("stk_cd").split("_")[0], 
-                                s.get("stk_nm"), float(s.get("flu_rt", "0").replace("+", "")), idx + 1
-                            ))
-                        await asyncio.sleep(0.1) # 종목 조회 간 지연
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch stocks for theme {theme['cd']} on {log_date}: {e}")
-                
                 await db.commit() # 날짜별로 커밋
                 logger.info(f"[{log_date}] 완료 ({i+1}/100)")
-                await asyncio.sleep(0.5) # 날짜 간 지연
+                await asyncio.sleep(0.1) # 날짜 간 지연
 
-        logger.info("모든 데이터(테마 + 종목 상세) 적재가 완료되었습니다!")
+        logger.info("모든 테마 데이터 적재가 완료되었습니다! (종목 상세는 조회 시 실시간 처리됩니다)")
 
 if __name__ == "__main__":
     asyncio.run(run_bulk_load())

@@ -32,11 +32,12 @@ class CollectorService:
                 if is_today:
                     daily_rt = float(t['flu_rt'].replace("+", ""))
                 else:
-                    # n일 당일 수익률 = (1 + Rn) / (1 + Rn+1) - 1
+                    # n일 당일 수익률 = (1 + Rn+1) / (1 + Rn) - 1
                     r_n = float(t['dt_prft_rt'].replace("+", "")) / 100
                     if cd in themes_n_plus_1:
-                        r_n_plus_1 = float(themes_n_plus_1[cd]['dt_prft_rt'].replace("+", "")) / 100
-                        daily_rt = ((1 + r_n) / (1 + r_n_plus_1) - 1) * 100
+                        r_n_plus_1 = float(themes_n_plus_1[cd].get('dt_prft_rt', "0").replace("+", "")) / 100
+                        # P_n / P_{n+1} - 1 = (1 + R_{n+1}) / (1 + R_n) - 1
+                        daily_rt = ((1 + r_n_plus_1) / (1 + r_n) - 1) * 100
                     else:
                         daily_rt = 0.0
                 
@@ -55,29 +56,6 @@ class CollectorService:
                         (log_date, theme_cd, theme_nm, flu_rt, stk_num, main_stk_nm)
                         VALUES (?, ?, ?, ?, ?, ?)
                     """, (target_date, tr['cd'], tr['nm'], tr['rt'], tr['stk_num'], tr['main_stk']))
-                
-                # 상위 30개 테마에 대해서만 종목 상세 정보 수집
-                for tr in theme_results[:30]:
-                    t_cd = tr['cd']
-                    stock_res = await self.client.get_theme_details(theme_grp_cd=t_cd, date_tp=str(date_tp))
-                    stocks = stock_res.get("thema_comp_stk", [])
-                    
-                    # 해당 날짜의 종목별 등락률 정렬
-                    sorted_stocks = sorted(
-                        stocks, 
-                        key=lambda x: float(x.get("flu_rt", "0").replace("+", "")), 
-                        reverse=True
-                    )
-
-                    for idx, s in enumerate(sorted_stocks[:10]):
-                        await db.execute("""
-                            INSERT OR REPLACE INTO daily_theme_stocks
-                            (log_date, theme_cd, stk_cd, stk_nm, flu_rt, rank)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """, (
-                            target_date, t_cd, s.get("stk_cd").split("_")[0], 
-                            s.get("stk_nm"), float(s.get("flu_rt", "0").replace("+", "")), idx + 1
-                        ))
                 
                 await db.commit()
             return True
