@@ -172,8 +172,10 @@ class ThemeService:
     async def get_historical_heatmap(self, log_date: str) -> List[Dict[str, Any]]:
         """
         특정 날짜의 테마 데이터를 DB에서 조회합니다.
+        데이터가 없으면 실시간으로 수집하여 DB를 채우고 반환합니다. (Lazy Loading)
         """
         try:
+            # 1. DB 먼저 조회
             async with aiosqlite.connect(DB_PATH) as db:
                 async with db.execute("""
                     SELECT theme_cd, theme_nm, flu_rt, stk_num, main_stk_nm 
@@ -182,10 +184,71 @@ class ThemeService:
                     ORDER BY flu_rt DESC
                 """, (log_date,)) as cursor:
                     rows = await cursor.fetchall()
-                    return [{
-                        "id": r[0], "name": r[1], "value": r[2], 
-                        "stk_num": r[3], "main_stk": r[4]
-                    } for r in rows]
+                    if rows:
+                        return [{
+                            "id": r[0], "name": r[1], "value": r[2], 
+                            "stk_num": r[3], "main_stk": r[4]
+                        } for r in rows]
+
+            # 2. DB에 데이터가 없으면 실시간 수집 시도
+            logger.info(f"Data for {log_date} missing in DB. Attempting lazy collection...")
+            
+            business_dates = await self._get_business_dates()
+            if log_date not in business_dates:
+                logger.warning(f"{log_date} is not a valid business date.")
+                return []
+            
+            # date_tp 계산 (오늘=1, 어제=2...)
+            date_tp = business_dates.index(log_date) + 1
+            is_today = (date_tp == 1)
+
+            # API 호출 (역산 필요 시 n+1 데이터까지 조회)
+            res_n = await self.client.get_theme_groups(qry_tp="0", date_tp=str(date_tp), flu_pl_amt_tp="3")
+            themes_n = res_n.get("thema_grp", [])
+            
+            themes_n_plus_1 = {}
+            if not is_today:
+                res_n1 = await self.client.get_theme_groups(qry_tp="0", date_tp=str(date_tp + 1), flu_pl_amt_tp="3")
+                themes_n_plus_1 = {t['thema_grp_cd']: t for t in res_n1.get("thema_grp", [])}
+
+            processed_data = []
+            for t in themes_n:
+                cd = t['thema_grp_cd']
+                nm = t['thema_nm']
+                stk_num = int(t['stk_num'])
+                main_stk = t['main_stk']
+                
+                if is_today:
+                    daily_rt = float(t['flu_rt'].replace("+", ""))
+                else:
+                    # 당일 수익률 역산: (1 + R_{n+1}) / (1 + R_n) - 1
+                    r_n = float(t.get('dt_prft_rt', "0").replace("+", "")) / 100
+                    if cd in themes_n_plus_1:
+                        r_n1 = float(themes_n_plus_1[cd].get('dt_prft_rt', "0").replace("+", "")) / 100
+                        daily_rt = ((1 + r_n1) / (1 + r_n) - 1) * 100
+                    else:
+                        daily_rt = 0.0
+                
+                processed_data.append({
+                    "id": cd, "name": nm, "value": round(daily_rt, 2), 
+                    "stk_num": stk_num, "main_stk": main_stk
+                })
+
+            # 3. 수집된 데이터 DB 저장
+            if processed_data:
+                async with aiosqlite.connect(DB_PATH) as db:
+                    for item in processed_data:
+                        await db.execute("""
+                            INSERT OR REPLACE INTO daily_themes 
+                            (log_date, theme_cd, theme_nm, flu_rt, stk_num, main_stk_nm)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (log_date, item['id'], item['name'], item['value'], item['stk_num'], item['main_stk']))
+                    await db.commit()
+                logger.info(f"Successfully backfilled {log_date} with {len(processed_data)} themes.")
+
+            # 정렬하여 반환
+            return sorted(processed_data, key=lambda x: x['value'], reverse=True)
+
         except Exception as e:
-            logger.error(f"Error getting historical heatmap for {log_date}: {e}")
+            logger.error(f"Error in lazy loading for {log_date}: {e}")
             return []
