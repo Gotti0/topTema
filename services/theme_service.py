@@ -1,5 +1,6 @@
 from datetime import datetime
 import logging
+import asyncio
 import time
 import aiosqlite
 from typing import List, Dict, Any, Optional
@@ -105,7 +106,7 @@ class ThemeService:
                         "raw_rt": float(s_data.get("flu_rt", "0").replace("+", ""))
                     })
             else:
-                # 과거 데이터 역산
+                # 1단계: 기존 수학 공식으로 테마 전체 종목의 등락률을 빠르게 계산
                 stock_res_n1 = await self.client.get_theme_details(theme_grp_cd=theme_grp_cd, date_tp=str(date_tp + 1))
                 stocks_n1 = {s['stk_cd']: s for s in stock_res_n1.get("thema_comp_stk", [])}
 
@@ -119,15 +120,45 @@ class ThemeService:
                         calculated_stocks.append({
                             "code": s_cd.split("_")[0],
                             "name": s_n.get("stk_nm"),
-                            "price": "N/A",
+                            "price": "N/A", # 3단계에서 채움
                             "change_rt": f"{'+' if d_rt > 0 else ''}{round(d_rt, 2)}%",
-                            "change_amt": "0",
+                            "change_amt": "0", # 3단계에서 채움
                             "raw_rt": d_rt
                         })
 
-            # 4. 정렬 및 상위 10개 추출
+            # 2단계: 정렬 및 상위 10개 추출
             sorted_stocks = sorted(calculated_stocks, key=lambda x: x['raw_rt'], reverse=True)
             top10 = sorted_stocks[:10]
+
+            # 3단계: 과거 데이터의 경우 상위 10개 종목에 대해서만 일봉 차트 API를 호출 (Lazy Fetching)
+            if date_tp != 1:
+                async def fetch_detailed_chart(stock):
+                    try:
+                        chart_res = await self.client.get_daily_chart_data(stk_cd=stock["code"], base_dt=log_date)
+                        chart_data = chart_res.get("stk_dt_pole_chart_qry", [])
+                        target_item = next((item for item in chart_data if item.get('dt') == log_date), None)
+                        
+                        if not target_item and chart_data:
+                            target_item = chart_data[0] # Fallback
+                            
+                        if target_item:
+                            cur_prc = float(target_item.get("cur_prc", "0"))
+                            pred_pre = float(target_item.get("pred_pre", "0"))
+                            prev_prc = cur_prc - pred_pre
+                            d_rt = (pred_pre / prev_prc) * 100 if prev_prc != 0 else 0
+                            
+                            stock["price"] = str(int(cur_prc))
+                            stock["change_rt"] = f"{'+' if d_rt > 0 else ''}{round(d_rt, 2)}%"
+                            stock["change_amt"] = str(int(pred_pre))
+                            stock["raw_rt"] = d_rt
+                    except Exception as e:
+                        logger.error(f"Error fetching chart for {stock['code']}: {e}")
+
+                tasks = [fetch_detailed_chart(s) for s in top10]
+                await asyncio.gather(*tasks)
+                
+                # 일봉 차트의 실제 등락률 기준으로 다시 한 번 정렬 (수학적 근사 오차 방지)
+                top10 = sorted(top10, key=lambda x: x['raw_rt'], reverse=True)
 
             # 가공 데이터에서 내부용 정렬 필드 제거
             for s in top10: s.pop("raw_rt")
